@@ -1,45 +1,47 @@
-const express = require("express");
+// Минимальный relay на Express, проксирует /v1/* в api.openai.com/v1/*
+// и всегда подставляет серверный OPENAI_API_KEY из .env
+
+import express from "express";
+import { createProxyMiddleware } from "http-proxy-middleware";
+import cors from "cors";
+import morgan from "morgan";
 
 const app = express();
-app.use(express.json({ limit: "25mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(cors());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use(morgan("tiny"));
 
-const PORT = process.env.PORT || 3000;
-const OPENAI_KEY = process.env.OPENAI_API_KEY;           // ключ OpenAI
-const OPENAI_BASE = process.env.OPENAI_API_BASE || "https://api.openai.com/v1";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+if (!OPENAI_API_KEY) {
+  console.error("OPENAI_API_KEY is missing in env");
+  process.exit(1);
+}
 
-// CORS (на всякий случай)
-app.use((_, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  next();
-});
+const target = "https://api.openai.com";
 
-// health
-app.get("/", (_, res) => res.json({ ok: true }));
+app.use(
+  "/v1",
+  createProxyMiddleware({
+    target,
+    changeOrigin: true,
+    pathRewrite: { "^/v1": "/v1" },
+    onProxyReq: (proxyReq, req, res) => {
+      // Всегда принудительно подставляем наш серверный ключ
+      proxyReq.setHeader("Authorization", `Bearer ${OPENAI_API_KEY}`);
+      // Иногда полезно явно проставить json
+      if (!proxyReq.getHeader("Content-Type")) {
+        proxyReq.setHeader("Content-Type", "application/json");
+      }
+    },
+    onError: (err, req, res) => {
+      console.error("Proxy error:", err);
+      res.status(502).json({ error: "proxy_error", detail: String(err?.message || err) });
+    }
+  })
+);
 
-// простое проксирование /v1/* -> OpenAI /v1/*
-app.all("/v1/*", async (req, res) => {
-  try {
-    const path = req.originalUrl.replace(/^\/v1/, "");
-    const url = `${OPENAI_BASE}${path}`;
-    const r = await fetch(url, {
-      method: req.method,
-      headers: {
-        "Authorization": `Bearer ${OPENAI_KEY}`,
-        "Content-Type": req.get("content-type") || "application/json"
-      },
-      body: ["GET","HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body)
-    });
-
-    const text = await r.text();
-    res.status(r.status).send(text);
-  } catch (e) {
-    res.status(500).json({ error: { message: e.message }});
-  }
-});
-
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-  console.log(`Relay listening on :${PORT}`);
+  console.log(`Relay is running on :${PORT}`);
 });
