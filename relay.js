@@ -1,75 +1,38 @@
+// relay.js
 import express from "express";
 import fetch from "node-fetch";
-import cors from "cors";
 
-const OPENAI_API = "https://api.openai.com"; // целевой API
 const app = express();
 
-app.use(cors());
+// не ставим app.use(express.json()) ДО /v1/files
 
-// ВАЖНО: никакого body-parser ДО этого маршрута!
-// Проксирование multipart/form-data как есть
-app.post("/v1/files", async (req, res) => {
-  try {
-    // Пробрасываем исходные заголовки контента
-    const contentType = req.headers["content-type"];
-    const contentLength = req.headers["content-length"];
-
-    const resp = await fetch(`${OPENAI_API}/v1/files`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        ...(contentType ? { "Content-Type": contentType } : {}),
-        ...(contentLength ? { "Content-Length": contentLength } : {}),
-      },
-      // Тело — исходный поток запроса (multipart)
-      body: req,
-    });
-
-    res.status(resp.status);
-    // Проксируем тело ответа как поток
-    resp.body.pipe(res);
-  } catch (err) {
-    console.error("FILES proxy error:", err);
-    res.status(502).json({
-      error: {
-        message: `Relay error on /v1/files: ${err.message || err}`,
-        type: "relay_error",
-      },
-    });
-  }
-});
-
-// Ниже можно подключать JSON-парсер для остальных эндпоинтов
-app.use(express.json({ limit: "50mb" }));
-
-// Проксирование Responses API (JSON)
-app.post("/v1/responses", async (req, res) => {
-  try {
-    const resp = await fetch(`${OPENAI_API}/v1/responses`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(req.body),
-    });
-
-    res.status(resp.status);
-    resp.body.pipe(res);
-  } catch (err) {
-    console.error("RESPONSES proxy error:", err);
-    res.status(502).json({
-      error: {
-        message: `Relay error on /v1/responses: ${err.message || err}`,
-        type: "relay_error",
-      },
-    });
-  }
-});
-
-// Простой healthcheck
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-const port = process.env.PORT || 3000;
+// Проксируем multipart как есть в OpenAI Files
+app.post("/v1/files", async (req, res) => {
+  try {
+    const upstream = await fetch("https://api.openai.com/v1/files", {
+      method: "POST",
+      headers: {
+        // критично: пробросить исходный content-type с boundary
+        "content-type": req.headers["content-type"],
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: req, // стрим напрямую
+    });
+
+    res.status(upstream.status);
+    const text = await upstream.text();
+    res.send(text);
+  } catch (e) {
+    console.error("Relay /v1/files error:", e);
+    res.status(500).json({ error: { message: String(e) } });
+  }
+});
+
+// все JSON-роуты — ниже, чтобы не сломать multipart
+app.use(express.json({ limit: "5mb" }));
+app.post("/echo", (req, res) => res.json(req.body));
+
+const port = process.env.PORT || 10000;
 app.listen(port, () => console.log(`Relay listening on ${port}`));
