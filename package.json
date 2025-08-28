@@ -1,17 +1,13 @@
 {
   "name": "openai-relay",
   "version": "1.0.0",
-  "type": "module",
-  "description": "Tiny proxy for OpenAI (files + responses) to use from Bitrix/Yandex Cloud",
+  "private": true,
   "main": "relay.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node relay.js"
   },
-  "engines": {
-    "node": ">=18"
-  },
   "dependencies": {
-    "cors": "^2.8.5",
     "express": "^4.19.2"
   }
 }
