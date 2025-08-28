@@ -1,13 +1,10 @@
 {
-  "name": "openai-relay",
+  "name": "bitrix-legal-ai-func",
   "version": "1.0.0",
   "type": "module",
-  "main": "relay.js",
+  "description": "Yandex Cloud Function: Bitrix smart process -> OpenAI legal review",
+  "main": "index.mjs",
   "dependencies": {
-    "express": "^4.19.2",
-    "node-fetch": "^3.3.2"
-  },
-  "scripts": {
-    "start": "node relay.js"
+    "form-data": "^4.0.0"
   }
 }
