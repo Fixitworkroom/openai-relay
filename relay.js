@@ -1,70 +1,45 @@
-// relay.js
-import express from "express";
-import cors from "cors";
+const express = require("express");
 
 const app = express();
-
-// Настройки
-const PORT = process.env.PORT || 3000;
-const UPSTREAM = process.env.UPSTREAM || "https://api.openai.com/v1";
-const FIXED_API_KEY = process.env.OPENAI_API_KEY || ""; // можно не задавать — тогда ждём Authorization от клиента
-
-// Для JSON-запросов (responses и пр.)
 app.use(express.json({ limit: "25mb" }));
-// Для файлов — не парсим тело тут, просто проксируем как есть
-app.use(cors());
+app.use(express.urlencoded({ extended: true }));
 
-// Health-check
-app.get("/health", (_req, res) => res.json({ ok: true }));
+const PORT = process.env.PORT || 3000;
+const OPENAI_KEY = process.env.OPENAI_API_KEY;           // ключ OpenAI
+const OPENAI_BASE = process.env.OPENAI_API_BASE || "https://api.openai.com/v1";
 
-// Универсальный прокси для всего /v1/*
-app.use("/v1", async (req, res) => {
+// CORS (на всякий случай)
+app.use((_, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  next();
+});
+
+// health
+app.get("/", (_, res) => res.json({ ok: true }));
+
+// простое проксирование /v1/* -> OpenAI /v1/*
+app.all("/v1/*", async (req, res) => {
   try {
-    // Собираем URL апстрима
-    const target = `${UPSTREAM}${req.originalUrl.replace(/^\/v1/, "")}`;
-
-    // Заголовки: пробрасываем всё, но Authorization подставляем, если есть FIXED_API_KEY
-    const headers = new Headers();
-    for (const [k, v] of Object.entries(req.headers)) {
-      if (k.toLowerCase() === "host") continue;
-      if (k.toLowerCase() === "content-length") continue;
-      if (k.toLowerCase() === "authorization") continue; // перекроем ниже
-      headers.set(k, Array.isArray(v) ? v.join(", ") : v ?? "");
-    }
-    if (FIXED_API_KEY) {
-      headers.set("authorization", `Bearer ${FIXED_API_KEY}`);
-    } else if (req.headers.authorization) {
-      headers.set("authorization", req.headers.authorization);
-    } else {
-      return res.status(401).json({ error: "No Authorization and no OPENAI_API_KEY on server" });
-    }
-
-    // Важно: для multipart не трогаем body — читаем как stream
-    const init = {
+    const path = req.originalUrl.replace(/^\/v1/, "");
+    const url = `${OPENAI_BASE}${path}`;
+    const r = await fetch(url, {
       method: req.method,
-      headers,
-      // node >=18: req — это ReadableStream совместимый с fetch
-      body: ["GET", "HEAD"].includes(req.method) ? undefined : req
-    };
-
-    const upstreamRes = await fetch(target, init);
-
-    // Пробрасываем статус и заголовки
-    res.status(upstreamRes.status);
-    upstreamRes.headers.forEach((v, k) => {
-      // безопасные заголовки
-      if (k.toLowerCase() === "transfer-encoding") return;
-      res.setHeader(k, v);
+      headers: {
+        "Authorization": `Bearer ${OPENAI_KEY}`,
+        "Content-Type": req.get("content-type") || "application/json"
+      },
+      body: ["GET","HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body)
     });
 
-    // Отдаём поток тела, не буферизуя
-    upstreamRes.body.pipe(res);
-  } catch (err) {
-    console.error(err);
-    res.status(502).json({ error: "Upstream error", details: String(err?.message || err) });
+    const text = await r.text();
+    res.status(r.status).send(text);
+  } catch (e) {
+    res.status(500).json({ error: { message: e.message }});
   }
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Relay listening on http://0.0.0.0:${PORT} → ${UPSTREAM}`);
+app.listen(PORT, () => {
+  console.log(`Relay listening on :${PORT}`);
 });
